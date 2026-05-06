@@ -1,0 +1,119 @@
+Username Enumeration via Response Difference + Brute Force
+🎯 Objective
+
+Identify a valid username using response differences, then brute-force the password despite login protections.
+
+🧠 Vulnerability
+
+The application leaks information through inconsistent error messages:
+
+Invalid username → generic error
+Valid username → different response after multiple attempts
+
+This creates a username enumeration vulnerability, which can be chained with brute-force.
+
+🔍 Initial Observation
+
+I started by testing the login with random credentials:
+
+username=invalid-user&password=wrongpass
+
+Then intercepted the request using Burp and sent it to Intruder.
+
+🧪 Phase 1: Username Enumeration
+⚙️ Attack Setup
+Attack type → Cluster Bomb
+Payload positions:
+username=§invalid-username§&password=example§§
+🧠 Why this setup?
+First payload → list of usernames
+Second payload → null payload (5 times)
+
+👉 This repeats each username multiple times to trigger rate-limit behavior
+
+🚀 Attack Execution
+Loaded username wordlist
+Set second payload → Null payload → 5 iterations
+Started attack
+📊 Key Finding
+
+Most responses were similar.
+
+But for one username:
+
+Response length increased
+Error message changed to:
+"You have made too many incorrect login attempts"
+
+👉 This confirms:
+
+Username is valid
+Backend logic behaves differently for real users
+🧪 Phase 2: Password Brute Force
+
+Now I switched strategy.
+
+⚙️ Attack Setup
+Attack type → Sniper
+Fixed username = discovered valid username
+Payload position:
+username=valid-user&password=§password§
+🔍 Enhancement (Important)
+
+Added Grep Extract rule:
+
+Extract error message from response
+
+👉 This helps detect anomalies automatically
+
+🚀 Attack Execution
+Loaded password list
+Started attack
+📊 Key Finding
+
+Observed:
+
+Most responses → error message present
+One response → NO error message
+
+👉 That means:
+
+Login succeeded
+Server didn’t return failure message
+⏳ Rate Limit Handling
+
+After brute-force:
+
+Waited ~1 minute for lock reset
+
+👉 Important because:
+
+Account gets temporarily blocked after failed attempts
+🔓 Final Step
+
+Used discovered credentials:
+
+username: valid-user
+password: identified-password
+
+Successfully logged in and accessed account page.
+
+💥 Key Learning
+Always look for response differences, not just status codes
+Rate-limiting can actually help detect valid users
+Repeating payloads (null payload trick) is extremely useful
+“No error message” is often a success indicator
+🧠 My Thought Process
+Tried random login → observed generic errors
+Thought → “What if valid user behaves differently?”
+Triggered rate limit intentionally
+Detected anomaly → extracted valid username
+Switched to focused brute-force
+Used grep → found success signal
+🛡️ Fix / Prevention
+Use consistent error messages
+Avoid revealing rate-limit differences
+Implement:
+IP-based + account-based throttling
+CAPTCHA after failures
+Monitor abnormal login attempts
