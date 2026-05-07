@@ -1,0 +1,217 @@
+JWT Authentication Bypass via jku Header Injection
+📌 Lab Overview
+This lab demonstrates a critical JWT verification vulnerability where the server blindly trusts the jku (JSON Web Key Set URL) parameter supplied inside the JWT header.
+Because the application fetches public keys from a user-controlled URL without validating the domain, an attacker can host their own public key, sign arbitrary JWTs using the matching private key, and forge authenticated sessions as any user — including administrator.
+
+🎯 Objective
+
+
+Forge a valid JWT for the administrator user
+
+
+Access the /admin panel
+
+
+Delete the user carlos
+
+
+
+🧠 Vulnerability Understanding
+🔐 How JWT Verification Normally Works
+In RSA-based JWT authentication:
+
+
+The server signs JWTs using its private key
+
+
+The server verifies JWTs using its public key
+
+
+A JWT contains:
+HEADER.PAYLOAD.SIGNATURE
+Example payload:
+{  "sub": "wiener"}
+The signature proves that the payload was signed by the legitimate server.
+
+🧩 What is jku?
+jku stands for:
+JSON Web Key Set URL
+It tells the server where to fetch public keys from.
+Example:
+{  "alg": "RS256",  "kid": "abc123",  "jku": "https://trusted-site.com/jwks.json"}
+The server:
+
+
+Reads the jku
+
+
+Downloads the public key set
+
+
+Uses the specified key (kid) to verify the JWT signature
+
+
+
+💥 Root Cause
+The application failed to validate whether the jku URL belonged to a trusted domain.
+This allowed an attacker to:
+
+
+Generate their own RSA key pair
+
+
+Host their own public key
+
+
+Point jku to the attacker-controlled JWKS
+
+
+Sign forged JWTs using the matching private key
+
+
+As a result, the server trusted attacker-generated tokens.
+
+🔥 Attack Flow
+Generate RSA Key Pair        ↓Host Attacker Public Key (JWKS)        ↓Modify JWT Payload → sub=administrator        ↓Add malicious jku header        ↓Sign JWT using attacker private key        ↓Server fetches attacker public key        ↓Signature validates successfully        ↓Admin access granted
+
+🛠️ Exploitation Steps
+1️⃣ Login as Normal User
+Credentials provided by the lab:
+wiener : peter
+After login, intercept the authenticated request:
+GET /my-account
+Send the request to Burp Repeater.
+
+2️⃣ Verify Admin Access Restriction
+Modify the request path:
+GET /admin
+The server responds with unauthorized access because the current JWT belongs to wiener.
+This confirms that authorization is JWT-based.
+
+3️⃣ Generate RSA Key Pair
+Using Burp Suite JWT Editor:
+JWT Editor → Keys → New RSA Key → Generate
+This creates:
+
+
+Private key (used for signing)
+
+
+Public key (used for verification)
+
+
+Important understanding:
+The RSA key pair is independent of the JWT contents.
+The same private key can sign any modified payload later.
+
+4️⃣ Create Malicious JWKS
+On the exploit server, host a malicious JWK Set:
+{  "keys": [    {      "kty": "RSA",      "e": "AQAB",      "kid": "attacker-key",      "n": "..."    }  ]}
+The public key was copied directly from Burp:
+Copy Public Key as JWK
+
+5️⃣ Modify JWT Header
+Original JWT header was modified to include:
+{  "alg": "RS256",  "kid": "attacker-key",  "jku": "https://exploit-server-url/exploit"}
+Why this works
+The vulnerable server blindly trusts the attacker-supplied jku URL and downloads the attacker-controlled public key.
+
+6️⃣ Modify JWT Payload
+Payload modified from:
+{  "sub": "wiener"}
+to:
+{  "sub": "administrator"}
+This impersonates the administrator account.
+
+7️⃣ Re-sign the JWT
+The modified JWT was signed using the attacker-generated private key.
+Important concept:
+JWT signatures are generated from:
+base64(header) + "." + base64(payload)
+Therefore, any change to:
+
+
+header
+
+
+payload
+
+
+requires re-signing the token.
+
+8️⃣ Access Admin Panel
+The forged JWT was sent in the authenticated request:
+GET /admin
+The server:
+
+
+Fetched attacker JWKS from jku
+
+
+Retrieved attacker public key
+
+
+Verified signature successfully
+
+
+Trusted the payload
+
+
+Result:
+Admin panel access granted
+
+9️⃣ Delete User Carlos
+The admin panel exposed the following endpoint:
+/admin/delete?username=carlos
+Sending the request solved the lab.
+
+🔍 Core Security Lessons
+❌ Never trust user-controlled key locations
+Applications must never blindly trust:
+
+
+jku
+
+
+x5u
+
+
+external JWKS references
+
+
+without strict validation.
+
+❌ Signature validation is only as secure as key management
+Even strong cryptography becomes useless if attackers can control:
+
+
+which public key gets used
+
+
+where verification keys are fetched from
+
+
+
+✅ Proper Mitigations
+
+
+Hardcode trusted JWKS domains
+
+
+Enforce allowlists for jku
+
+
+Ignore externally supplied key URLs entirely
+
+
+Pin trusted signing keys
+
+
+Validate issuer (iss) strictly
+
+
+
+🧠 Key Takeaway
+This vulnerability was not caused by broken cryptography.
+The cryptography worked correctly.
+The failure was trusting attacker-controlled key infrastructure during JWT verification.
