@@ -1,0 +1,160 @@
+JWT Authentication Bypass via Embedded JWK Injection
+Lab Overview ->
+
+This lab demonstrated a JWT authentication bypass caused by improper trust of attacker-controlled JWK headers.
+
+The application accepted a jwk parameter directly from the JWT header and used it during signature verification. This allowed me to generate my own RSA key pair, forge a token for the administrator user, sign it using my private key, and trick the server into verifying it using my supplied public key.
+
+As a result, I gained access to the admin panel and deleted the target user.
+
+Understanding the Core Issue
+
+The vulnerability was not in RSA itself or in JWT as a technology.
+
+The actual issue was a broken trust model.
+
+The server verified whether the signature mathematically matched the supplied public key, but failed to verify whether that public key was actually trusted.
+
+Initial Observation
+
+After logging in with my own account, I intercepted the following request:
+
+GET /my-account HTTP/2
+
+I changed the endpoint to:
+
+GET /admin HTTP/2
+
+The response confirmed that the admin panel was restricted to the administrator user.
+
+This indicated that authorization was likely being handled through claims present inside the JWT.
+
+JWT Analysis
+
+The JWT payload contained a sub claim similar to:
+
+{
+  "sub": "wiener"
+}
+
+From the application behavior, I inferred that the backend was probably using the sub claim as the authenticated identity.
+
+So I modified it to:
+
+{
+  "sub": "administrator"
+}
+
+At this point, the original JWT signature became invalid because the payload had been modified.
+
+Normally, this should have caused verification failure.
+
+Understanding Why Signature Verification Matters
+
+JWT signatures exist to ensure:
+
+integrity of the payload
+authenticity of the issuer
+
+In a secure implementation:
+
+Server signs the token using its private key.
+Server later verifies it using its own trusted public key.
+
+This prevents attackers from modifying claims such as:
+
+{
+  "sub": "administrator"
+}
+
+because they do not possess the server’s private signing key.
+
+Exploitation Process
+
+Using Burp Suite's JWT Editor extension, I generated a completely new RSA key pair:
+
+attacker private key
+attacker public key
+
+Then I performed two actions:
+
+1. Signed the forged token
+
+The modified administrator payload was signed using my generated private key.
+
+2. Embedded my public key inside the JWT header
+
+Burp automatically inserted a jwk header similar to:
+
+{
+  "jwk": {
+    "kty": "RSA",
+    "e": "AQAB",
+    "n": "..."
+  }
+}
+
+This was the critical step.
+
+Root Cause
+
+The application incorrectly used the public key supplied inside the JWT header for verification.
+
+Conceptually, the backend logic behaved like:
+
+public_key = token.header["jwk"]
+VERIFY(token, public_key)
+
+instead of securely using its own trusted public key:
+
+VERIFY(token, server_public_key)
+
+Because of this:
+
+I controlled the payload
+I controlled the signing private key
+I controlled the verification public key
+
+The entire trust chain became attacker-controlled.
+
+Why the Attack Worked
+
+The server only checked:
+
+"Does this signature match the supplied public key?"
+
+It did NOT check:
+
+"Should this public key be trusted at all?"
+
+Since my private/public keys were a valid pair, signature verification succeeded successfully.
+
+The application therefore accepted my forged administrator token.
+
+Impact
+
+Successful exploitation allowed:
+
+authentication bypass
+privilege escalation
+unauthorized access to administrator functionality
+
+I used the admin functionality to delete the target user:
+
+/admin/delete?username=carlos
+
+which solved the lab.
+
+Key Security Lesson
+
+This lab reinforced an important security principle:
+
+Cryptography can be implemented correctly
+while the trust model is still broken.
+
+The vulnerability was not caused by weak encryption.
+
+It was caused by trusting attacker-controlled verification keys.
+
+A secure JWT implementation must never trust cryptographic key material directly from untrusted token headers unless strict issuer validation and trusted key management are enforced.
+
