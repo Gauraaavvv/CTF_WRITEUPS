@@ -1,0 +1,249 @@
+# PortSwigger Lab — 2FA Broken Logic
+
+## Lab
+
+PortSwigger Web Security Academy — "2FA broken logic"
+
+## Goal
+
+Access Carlos's account by exploiting flawed multi-factor authentication logic.
+
+---
+
+# Vulnerability Overview
+
+The application uses a `verify` cookie during the MFA flow:
+
+```http
+Cookie: verify=wiener; session=...
+```
+
+The vulnerability exists because the server trusts the client-controlled `verify` value to determine which user's MFA process is being verified.
+
+Instead of binding the MFA flow to the authenticated session user internally, the application allows the attacker to change:
+
+```http
+verify=wiener
+```
+
+to:
+
+```http
+verify=carlos
+```
+
+This creates authentication state confusion.
+
+---
+
+# Core Logic Flaw
+
+A secure implementation should do something like:
+
+```python
+mfa_user = session["authenticated_user"]
+```
+
+But the vulnerable application effectively behaves like:
+
+```python
+mfa_user = request.cookies["verify"]
+```
+
+This allows an attacker to manipulate the MFA target identity.
+
+---
+
+# Understanding the Attack
+
+The application still requires a valid pre-2FA session.
+
+So the vulnerability is NOT:
+
+* authentication bypass without login
+* session hijacking
+* session fixation
+
+The actual issue is:
+
+* MFA identity not bound to authenticated session
+* attacker-controlled MFA target selection
+
+---
+
+# Attack Flow
+
+## Step 1 — Login as Wiener
+
+Login using valid credentials:
+
+```text
+wiener : peter
+```
+
+During the login flow, intercept the request:
+
+```http
+GET /login2
+Cookie: verify=wiener; session=<session>
+```
+
+---
+
+## Step 2 — Logout
+
+Logout from the account.
+
+---
+
+## Step 3 — Generate MFA Challenge for Carlos
+
+Send the captured `GET /login2` request to Repeater.
+
+Modify:
+
+```http
+verify=wiener
+```
+
+To:
+
+```http
+verify=carlos
+```
+
+Send the request.
+
+The server responds with a new session:
+
+```http
+Set-Cookie: session=<new_session>
+```
+
+This step initializes a new MFA session context for Carlos.
+
+The important observation is:
+
+* the server trusted attacker-controlled identity input
+* the new MFA session became associated with Carlos
+
+---
+
+## Step 4 — Login Again as Wiener
+
+Login again using:
+
+```text
+wiener : peter
+```
+
+Reach the OTP page.
+
+Submit any invalid OTP once.
+
+Capture the POST request:
+
+```http
+POST /login2
+```
+
+---
+
+## Step 5 — Modify MFA Target
+
+Change:
+
+```http
+Cookie: verify=wiener
+```
+
+To:
+
+```http
+Cookie: verify=carlos
+```
+
+Now the request becomes:
+
+```http
+POST /login2
+Cookie: verify=carlos; session=<mfa_session>
+```
+
+The server now validates OTPs against Carlos.
+
+---
+
+## Step 6 — Brute Force the OTP
+
+Brute-force the 4-digit OTP.
+
+Success response:
+
+```http
+HTTP/2 302 Found
+```
+
+This indicates successful MFA verification.
+
+---
+
+## Step 7 — Access Carlos Account
+
+Use the successful session in the browser.
+
+Open:
+
+```text
+/my-account
+```
+
+The lab is solved.
+
+---
+
+# Key Takeaways
+
+## 1. MFA Must Be Bound to Session Identity
+
+The server should never trust user-controlled parameters to decide whose MFA challenge is being verified.
+
+---
+
+## 2. Authentication State Confusion
+
+The vulnerability occurred because:
+
+| Component             | Identity |
+| --------------------- | -------- |
+| Session               | Wiener   |
+| MFA Target (`verify`) | Carlos   |
+
+The server failed to enforce identity consistency.
+
+---
+
+## 3. Client-Controlled Identity Is Dangerous
+
+The application allowed:
+
+```http
+verify=carlos
+```
+
+to influence server-side authentication state.
+
+This is a common design flaw in poorly implemented custom authentication systems.
+
+---
+
+# Final Understanding
+
+The exploit worked because:
+
+* a valid MFA session was required
+* the application trusted the `verify` cookie
+* the MFA identity was not securely bound to the authenticated user
+* attacker-controlled input poisoned MFA session state
+
+This resulted in successful OTP verification for another user account.
