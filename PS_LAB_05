@@ -113,16 +113,13 @@ base64(carlos:md5(password))
 Use it as:
 stay-logged-in=<forged_cookie>
 Access Carlos's account
-Why Intruder Was Used
 
-The lab provided a list of candidate passwords.
-
-Instead of brute-forcing all passwords manually, Burp Intruder automated:
-
+Intruder used to perform: 
 MD5 hashing
 username prefixing
 Base64 encoding
 authentication testing
+
 Attack Walkthrough
 Step 1 — Capture Authenticated Request
 
