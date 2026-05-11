@@ -1,0 +1,336 @@
+PortSwigger Lab — Brute-Forcing a Stay-Logged-In Cookie
+Difficulty
+
+Practitioner
+
+Lab Objective
+
+Gain access to Carlos's account by forging a valid stay-logged-in cookie.
+
+Credentials Provided
+wiener : peter
+Victim
+carlos
+Initial Observation
+
+After logging in with:
+
+wiener : peter
+
+and selecting:
+
+Stay logged in
+
+the application generated the following cookie:
+
+stay-logged-in=<value>
+
+The value looked encoded rather than random.
+
+Cookie Analysis
+
+Using Burp Decoder, the cookie was Base64-decoded.
+
+Decoded Value
+wiener:51dc30ddc473d43a6011e9ebba6ca770
+
+Several things immediately stood out.
+
+Observation	Reasoning
+wiener:	Clearly the username
+32 hexadecimal characters	Strong MD5 indicator
+Lowercase hex charset	Matches MD5 format
+
+This led to the hypothesis:
+
+base64(username:md5(password))
+Hypothesis Verification
+
+The known password was:
+
+peter
+
+Generating its MD5 hash produced:
+
+51dc30ddc473d43a6011e9ebba6ca770
+
+This matched the decoded cookie exactly.
+
+Hypothesis Confirmed
+
+The cookie structure was:
+
+base64(username:md5(password))
+Vulnerability Understanding
+
+The application was effectively using:
+
+knowledge of password hash
+
+as authentication proof.
+
+Meaning:
+
+If attacker can reconstruct:
+
+base64(username:md5(password))
+
+→ attacker can forge valid authentication cookies
+Important Realization
+
+The vulnerability was NOT:
+
+Base64
+MD5 alone
+
+The actual issue was:
+
+predictable client-controlled authentication tokens
+
+The application trusted deterministic user-generated data as authentication state.
+
+Why This Is Dangerous
+
+The cookie:
+
+was deterministic
+could be reproduced offline
+was not cryptographically signed
+was not tied to a random server-side session
+
+This meant authentication became:
+
+password guessing
+→ token reconstruction
+→ account compromise
+Attack Strategy
+
+To impersonate Carlos:
+
+Guess Carlos's password
+Generate:
+base64(carlos:md5(password))
+Use it as:
+stay-logged-in=<forged_cookie>
+Access Carlos's account
+Why Intruder Was Used
+
+The lab provided a list of candidate passwords.
+
+Instead of brute-forcing all passwords manually, Burp Intruder automated:
+
+MD5 hashing
+username prefixing
+Base64 encoding
+authentication testing
+Attack Walkthrough
+Step 1 — Capture Authenticated Request
+
+After logging in as Wiener, capture:
+
+GET /my-account?id=wiener
+
+The request contains:
+
+Cookie: stay-logged-in=<cookie>
+
+Highlight the cookie value and send the request to Burp Intruder.
+
+Step 2 — Configure Initial Payload
+
+Initially add a single payload:
+
+peter
+
+This step was used to validate the payload transformation chain.
+
+Step 3 — Configure Payload Processing Rules
+
+Payload processing rules were added in this exact order.
+
+Rule 1 — MD5 Hash
+
+Transforms:
+
+peter
+
+into:
+
+51dc30ddc473d43a6011e9ebba6ca770
+Rule 2 — Add Prefix
+
+Prefix added:
+
+wiener:
+
+Result:
+
+wiener:51dc30ddc473d43a6011e9ebba6ca770
+Rule 3 — Base64 Encode
+
+Final payload becomes:
+
+base64(wiener:51dc30ddc473d43a6011e9ebba6ca770)
+
+This perfectly recreated the application's cookie generation logic.
+
+Step 4 — Configure Success Detection
+
+Authenticated account pages contained:
+
+Update email
+
+Unauthenticated responses did not.
+
+So under:
+
+Intruder → Settings → Grep Match
+
+the following string was added:
+
+Update email
+
+This became the success indicator.
+
+Step 5 — Validate Against Own Account
+
+The first attack targeted:
+
+wiener
+
+This was NOT to gain access.
+
+I was already authenticated.
+
+The purpose was to verify:
+
+our reconstruction logic is correct
+
+Meaning:
+
+cookie structure understood correctly
+MD5 assumption correct
+no hidden signing exists
+no additional server-side secret exists
+
+Once the forged cookie authenticated Wiener successfully, the exploit model was validated.
+
+Step 6 — Attack Carlos
+
+Now the real attack began.
+
+URL Change
+
+Changed:
+
+/my-account?id=wiener
+
+To:
+
+/my-account?id=carlos
+Prefix Change
+
+Changed:
+
+wiener:
+
+To:
+
+carlos:
+Payload Change
+
+Removed:
+
+peter
+
+Added:
+
+candidate password list
+
+Now Intruder generated:
+
+base64(carlos:md5(candidate_password))
+
+for every candidate automatically.
+
+Successful Response Analysis
+
+Most responses returned:
+
+Status	Length
+302	173
+
+These were failed authentication redirects.
+
+However, one response returned:
+
+Indicator	Value
+Update email	1
+Response Length	3450
+
+This indicated:
+
+correct Carlos password candidate found
+
+and therefore:
+
+valid stay-logged-in cookie successfully forged
+
+Result:
+
+authenticated access to Carlos account
+Likely Internal Server Logic
+
+The vulnerable application probably behaved like:
+
+cookie = base64_decode(stay_logged_in)
+
+username, password_hash = cookie.split(":")
+
+if password_hash == database[username].md5_password:
+    authenticate(username)
+
+This design is fundamentally insecure.
+
+Root Cause
+
+The application trusted:
+
+client-generated password-derived authentication tokens
+
+instead of:
+
+random server-generated session identifiers
+
+The authentication token was:
+
+deterministic
+forgeable
+reproducible offline
+directly tied to password hash
+Key Security Lessons
+1. Authentication Tokens Must Be Random
+
+Authentication should rely on unpredictable server-generated session tokens.
+
+2. Password Hashes Should Never Become Authentication Tokens
+
+Even hashed passwords should never act as reusable login credentials.
+
+3. MD5 Is Insecure
+
+Fast hashing algorithms make brute-force attacks highly practical.
+
+4. Client-Controlled Authentication State Is Dangerous
+
+If attackers can fully reproduce authentication tokens offline, account compromise becomes inevitable.
+
+Final Understanding
+
+This lab demonstrated:
+
+authentication token forgery through predictable cookie construction
+
+The exploit succeeded because the application treated:
+
+base64(username:md5(password)) as valid authentication proof
